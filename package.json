@@ -45,6 +45,8 @@
   "dependencies": {
     "@google/genai": "^2.23.0",
     "dotenv": "^18.0.1",
-    "openai": "^7.20.0"
+    "groq-sdk": "^1.6.0",
+    "openai": "^7.20.0",
+    "serpapi": "^2.2.1"
   }
 }

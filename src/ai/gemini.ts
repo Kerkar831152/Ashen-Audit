@@ -1,16 +1,8 @@
 import { GoogleGenAI } from '@google/genai';
-
+import { ReviewResult } from './types.js';
 const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 });
-
-export interface ReviewResult {
-    verdict: 'pass' | 'issues_found' | 'uncertain';
-    confidence: number;
-    issues: string[];
-    reasoning: string;
-    correctedCode: string;
-}
 
 const prompt = (code: string) => `
 You are an independent code verification system.

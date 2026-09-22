@@ -1,16 +1,9 @@
 import OpenAI from 'openai';
-
+import { ReviewResult } from './types.js';
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-export interface ReviewResult {
-    verdict: 'pass' | 'issues_found' | 'uncertain';
-    confidence: number;
-    issues: string[];
-    reasoning: string;
-    correctedCode: string;
-}
 
 export async function reviewCodeWithOpenAI(
     code: string
