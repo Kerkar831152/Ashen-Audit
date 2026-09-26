@@ -1,24 +1,45 @@
 import OpenAI from 'openai';
+import * as dotenv from 'dotenv';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
 import { ReviewResult } from './types.js';
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+
+const currentFile = fileURLToPath(import.meta.url);
+const currentDirectory = path.dirname(currentFile);
+const projectRoot = path.resolve(currentDirectory, '../../');
+const envPath = path.join(projectRoot, '.env');
+
+dotenv.config({
+    path: envPath
 });
 
+const apiKey = process.env.OPENAI_API_KEY;
 
-export async function reviewCodeWithOpenAI(
-    code: string
-): Promise<ReviewResult> {
+if (!apiKey) {
+    throw new Error(
+        `AshenAudit: OPENAI_API_KEY was not found. Expected .env at: ${envPath}`
+    );
+}
 
-    console.log('AshenAudit: Sending request to OpenAI...');
+const openai = new OpenAI({
+    apiKey
+});
 
-    const prompt = `
+function buildPrompt(
+    code: string,
+    instruction: string
+): string {
+    return `
 You are an independent code verification system.
 
-Analyze the code carefully.
+${instruction}
 
-Determine whether it is correct.
+Analyze the supplied code carefully.
 
-Return ONLY valid JSON with this structure:
+Return ONLY valid JSON.
+
+Required structure:
 
 {
     "verdict": "pass",
@@ -32,6 +53,7 @@ Rules:
 - verdict must be "pass", "issues_found", or "uncertain".
 - confidence must be between 0 and 1.
 - Do not invent problems.
+- Only report issues supported by the supplied code.
 - If there is a real problem, explain it in issues.
 - If there is a problem, correctedCode must contain the complete corrected code.
 - If there is no problem, correctedCode must be empty.
@@ -43,37 +65,40 @@ Code:
 
 ${code}
 `;
+}
 
-    try {
+export async function reviewWithOpenAI(
+    code: string,
+    instruction: string,
+    model: string
+): Promise<ReviewResult> {
+    console.log(
+        `AshenAudit: Sending ${model} request to OpenAI...`
+    );
 
-        const response = await openai.responses.create({
-            model: 'gpt-5.6-luna',
-            input: prompt
+    const response =
+        await openai.responses.create({
+            model,
+            input: buildPrompt(
+                code,
+                instruction
+            )
         });
 
-        const text = response.output_text;
+    const text = response.output_text;
 
-        if (!text) {
-            throw new Error(
-                'OpenAI returned an empty response.'
-            );
-        }
-
-        const review = JSON.parse(text) as ReviewResult;
-
-        console.log(
-            'AshenAudit: OpenAI review completed.'
+    if (!text) {
+        throw new Error(
+            'OpenAI returned an empty response.'
         );
-
-        return review;
-
-    } catch (error) {
-
-        console.error(
-            'AshenAudit: OpenAI review failed:',
-            error
-        );
-
-        throw error;
     }
+
+    const review =
+        JSON.parse(text) as ReviewResult;
+
+    console.log(
+        `AshenAudit: ${model} review completed.`
+    );
+
+    return review;
 }

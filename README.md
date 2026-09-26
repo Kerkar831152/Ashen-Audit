@@ -1,71 +1,212 @@
-# ashen-audit README
+# AshenAudit
 
-This is the README for your extension "ashen-audit". After writing up a brief description, we recommend including the following sections.
+AI-assisted code verification, review, and repair directly inside Visual Studio Code.
 
-## Features
-
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
-
-For example if there is an image subfolder under your extension project workspace:
-
-\!\[feature X\]\(images/feature-x.png\)
-
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
-
-## Requirements
-
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
-
-## Extension Settings
-
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
-
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
+AshenAudit analyzes selected code using multiple specialized AI reviewers, compares their findings, optionally retrieves external technical evidence, and generates a corrected version of the code.
 
 ---
 
-## Following extension guidelines
+## Features
 
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
+### Multi-Agent Code Review
 
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
+AshenAudit uses specialized AI reviewers to analyze different aspects of the selected code.
 
-## Working with Markdown
+- **Triage** — syntax errors, obvious bugs, malformed code, and invalid usage
+- **Architecture** — structure, dependencies, API integration, and design issues
+- **Logic** — control flow, data flow, algorithms, edge cases, and runtime logic
+- **Security** — potential security vulnerabilities and unsafe practices
 
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
+Each reviewer has a specific responsibility instead of asking a single AI model to analyze everything.
 
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
+---
 
-## For more information
+### Multiple AI Providers
 
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
+AshenAudit supports multiple AI providers:
 
-**Enjoy!**
+- Google Gemini
+- Groq
+- OpenAI
+
+Provider fallback allows the review process to continue when an individual provider or model is unavailable.
+
+---
+
+### Reviewer Comparison
+
+After the specialized reviewers finish, AshenAudit compares their results.
+
+The comparison provides:
+
+- Overall verdict
+- Reviewer agreement or disagreement
+- Confidence
+- Combined issues
+- Reviewer count
+- Corrected code when available
+
+Possible verdicts include:
+
+- `pass`
+- `issues_found`
+- `uncertain`
+
+When specialized technical reviewers agree on an issue, their findings can be carried into the final verification stage.
+
+---
+
+### External Technical Evidence
+
+When reviewer findings require additional verification, AshenAudit can use **SerpApi** to search for external technical information.
+
+The resulting evidence is displayed in the review panel, including:
+
+- Search result title
+- Source link
+- Relevant snippet
+
+This provides an additional evidence layer when AI reviewers disagree or require external technical context.
+
+---
+
+### Final Verification and Code Repair
+
+After the initial review, AshenAudit runs a final verification and repair stage.
+
+The final reviewer receives:
+
+- Original source code
+- Specialized reviewer findings
+- External technical evidence when available
+
+It independently evaluates the findings and generates the final result.
+
+If genuine problems are found, AshenAudit generates the **complete corrected source code** rather than only returning individual changes.
+
+---
+
+### Copy and Apply Fix
+
+Once corrected code is generated, the developer can choose:
+
+**Copy Code**
+
+Copies the corrected source code to the clipboard.
+
+**Apply Fix**
+
+Replaces the originally selected code directly with the generated correction.
+
+The developer remains in control of whether the generated correction is applied.
+
+---
+
+### Terminal Verification Logs
+
+AshenAudit provides a detailed verification trace in the VS Code Extension Host terminal.
+
+The terminal can show:
+
+- Verification start
+- Specialized reviewer execution
+- Provider and model used
+- Reviewer verdict
+- Reviewer confidence
+- Detected issues
+- Reviewer reasoning
+- Combined result
+- External evidence search
+- Final synthesis result
+- Generated corrected code status
+- Local validation status
+
+This provides a transparent execution trace while AshenAudit performs the verification.
+
+---
+
+### Review Panel
+
+AshenAudit also provides a dedicated review panel inside VS Code.
+
+The panel displays:
+
+- Specialized reviewer results
+- Provider and model information
+- Reviewer verdicts
+- Confidence levels
+- Detected issues
+- Reviewer reasoning
+- Combined result
+- External technical evidence
+- Final corrected code
+- Copy Code action
+- Apply Fix action
+
+---
+
+### Optional Local Validation
+
+AshenAudit can optionally use locally installed compilers or interpreters for an additional validation layer.
+
+Examples include:
+
+| Language | Possible Validator |
+|---|---|
+| C++ | g++, Clang++, MSVC |
+| C | gcc, Clang |
+| JavaScript | Node.js |
+| TypeScript | TypeScript compiler |
+| Python | Python |
+| Java | javac |
+
+Local validation is optional.
+
+If no supported compiler or interpreter is available, AshenAudit continues with AI-based verification and reports that local validation is unavailable.
+
+AshenAudit does not bundle compilers with the extension.
+
+---
+
+## How It Works
+
+```text
+                    Selected Code
+                         │
+                         ▼
+              ┌─────────────────────┐
+              │  Specialized AI     │
+              │      Reviewers       │
+              └──────────┬──────────┘
+                         │
+          ┌──────────────┼──────────────┐
+          ▼              ▼              ▼
+       Triage       Architecture      Logic
+          │              │              │
+          └──────────────┼──────────────┘
+                         │
+                    Security
+                         │
+                         ▼
+              Reviewer Comparison
+                         │
+                ┌────────┴────────┐
+                │                 │
+             Agreement       Disagreement
+                │                 │
+                │                 ▼
+                │        SerpApi Evidence
+                │                 │
+                └────────┬────────┘
+                         ▼
+                Final Verification
+                         │
+                         ▼
+                  Code Repair
+                         │
+                         ▼
+                Corrected Source Code
+                         │
+                 ┌───────┴───────┐
+                 ▼               ▼
+             Copy Code       Apply Fix

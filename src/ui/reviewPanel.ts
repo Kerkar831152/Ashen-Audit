@@ -1,18 +1,16 @@
 import * as vscode from 'vscode';
 
-import { ReviewResult } from '../ai/types.js';
+import {
+    ReviewerDisplay
+} from '../ai/types.js';
 
 import {
     ComparisonResult
 } from '../ai/compare.js';
 
-
-export interface ReviewerDisplay {
-    name: string;
-    status: 'success' | 'failed';
-    review?: ReviewResult;
-    error?: string;
-}
+import {
+    SearchResult
+} from '../ai/serpapi.js';
 
 
 export function showReviewPanel(
@@ -20,7 +18,8 @@ export function showReviewPanel(
     reviewers: ReviewerDisplay[],
     comparison: ComparisonResult,
     documentUri: vscode.Uri,
-    selectionRange: vscode.Range
+    selectionRange: vscode.Range,
+    externalEvidence: SearchResult[] = []
 ) {
 
     const panel =
@@ -35,52 +34,38 @@ export function showReviewPanel(
         );
 
 
+    const nonce =
+        getNonce();
+
+
     panel.webview.html =
         getWebviewContent(
+            panel.webview,
+            nonce,
             reviewers,
-            comparison
+            comparison,
+            externalEvidence
         );
 
 
     panel.webview.onDidReceiveMessage(
         async message => {
 
-            if (message.command === 'copyCode') {
+            if (
+                message.command ===
+                'copyCode'
+            ) {
 
-                try {
-
-                    await vscode.env.clipboard.writeText(
-                        comparison.correctedCode
-                    );
-
-                    vscode.window.showInformationMessage(
-                        'AshenAudit: Corrected code copied to clipboard.'
-                    );
-
-                } catch (error) {
-
-                    const errorMessage =
-                        error instanceof Error
-                            ? error.message
-                            : String(error);
-
-                    vscode.window.showErrorMessage(
-                        `AshenAudit: Could not copy code. ${errorMessage}`
-                    );
-                }
-
-            }
+                const code =
+                    typeof message.code === 'string'
+                        ? message.code
+                        : '';
 
 
-            if (message.command === 'applyFix') {
-
-                if (
-                    !comparison.correctedCode ||
-                    !comparison.correctedCode.trim()
-                ) {
+                if (!code) {
 
                     vscode.window.showWarningMessage(
-                        'AshenAudit: No corrected code is available.'
+                        'AshenAudit: No corrected code available.'
                     );
 
                     return;
@@ -89,48 +74,14 @@ export function showReviewPanel(
 
                 try {
 
-                    const document =
-                        await vscode.workspace.openTextDocument(
-                            documentUri
-                        );
+                    await vscode.env.clipboard.writeText(
+                        code
+                    );
 
 
-                    const editor =
-                        await vscode.window.showTextDocument(
-                            document,
-                            {
-                                viewColumn:
-                                    vscode.ViewColumn.One,
-                                preserveFocus: true
-                            }
-                        );
-
-
-                    const success =
-                        await editor.edit(
-                            editBuilder => {
-
-                                editBuilder.replace(
-                                    selectionRange,
-                                    comparison.correctedCode
-                                );
-
-                            }
-                        );
-
-
-                    if (success) {
-
-                        vscode.window.showInformationMessage(
-                            'AshenAudit: Corrected code applied.'
-                        );
-
-                    } else {
-
-                        vscode.window.showErrorMessage(
-                            'AshenAudit: Could not apply the correction.'
-                        );
-                    }
+                    vscode.window.showInformationMessage(
+                        'AshenAudit: Corrected code copied.'
+                    );
 
                 } catch (error) {
 
@@ -139,888 +90,1148 @@ export function showReviewPanel(
                             ? error.message
                             : String(error);
 
+
+                    vscode.window.showErrorMessage(
+                        `AshenAudit: Failed to copy code. ${errorMessage}`
+                    );
+                }
+
+
+                return;
+            }
+
+
+            if (
+                message.command ===
+                'applyFix'
+            ) {
+
+                const code =
+                    typeof message.code === 'string'
+                        ? message.code
+                        : '';
+
+
+                if (!code) {
+
+                    vscode.window.showWarningMessage(
+                        'AshenAudit: No corrected code available.'
+                    );
+
+                    return;
+                }
+
+
+                const editor =
+                    vscode.window.visibleTextEditors.find(
+                        currentEditor =>
+                            currentEditor.document.uri.toString() ===
+                            documentUri.toString()
+                    );
+
+
+                if (!editor) {
+
+                    vscode.window.showErrorMessage(
+                        'AshenAudit: Original editor is no longer available.'
+                    );
+
+                    return;
+                }
+
+
+                try {
+
+                    const success =
+                        await editor.edit(
+                            editBuilder => {
+
+                                editBuilder.replace(
+                                    selectionRange,
+                                    code
+                                );
+                            }
+                        );
+
+
+                    if (!success) {
+
+                        vscode.window.showErrorMessage(
+                            'AshenAudit: VS Code could not apply the fix.'
+                        );
+
+                        return;
+                    }
+
+
+                    vscode.window.showInformationMessage(
+                        'AshenAudit: Fix applied.'
+                    );
+
+
+                    panel.webview.postMessage({
+                        command:
+                            'fixApplied'
+                    });
+
+                } catch (error) {
+
+                    const errorMessage =
+                        error instanceof Error
+                            ? error.message
+                            : String(error);
+
+
                     vscode.window.showErrorMessage(
                         `AshenAudit: Failed to apply fix. ${errorMessage}`
                     );
                 }
+
+
+                return;
             }
 
+
+            if (
+                message.command ===
+                'openExternal'
+            ) {
+
+                if (
+                    typeof message.url ===
+                    'string'
+                ) {
+
+                    try {
+
+                        await vscode.env.openExternal(
+                            vscode.Uri.parse(
+                                message.url
+                            )
+                        );
+
+                    } catch (error) {
+
+                        const errorMessage =
+                            error instanceof Error
+                                ? error.message
+                                : String(error);
+
+
+                        vscode.window.showErrorMessage(
+                            `AshenAudit: Failed to open link. ${errorMessage}`
+                        );
+                    }
+                }
+
+
+                return;
+            }
         },
-
         undefined,
-
         context.subscriptions
     );
 }
 
 
 function getWebviewContent(
+    webview: vscode.Webview,
+    nonce: string,
     reviewers: ReviewerDisplay[],
-    comparison: ComparisonResult
+    comparison: ComparisonResult,
+    externalEvidence: SearchResult[]
 ): string {
 
-
-    const reviewerHtml =
-        reviewers.map(
-            reviewer => {
-
-                if (
-                    reviewer.status ===
-                    'failed'
-                ) {
-
-                    return `
-                        <div class="reviewer failed">
-
-                            <div class="reviewer-header">
-
-                                <h3>
-                                    ${escapeHtml(
-                                        reviewer.name
-                                    )}
-                                </h3>
-
-                                <span class="status failed-status">
-                                    FAILED
-                                </span>
-
-                            </div>
-
-                            <p class="error">
-                                ${escapeHtml(
-                                    reviewer.error ??
-                                    'Unknown error'
-                                )}
-                            </p>
-
-                        </div>
-                    `;
-                }
+    const reviewerSections =
+        reviewers
+            .map(
+                reviewer =>
+                    renderReviewer(
+                        reviewer
+                    )
+            )
+            .join('');
 
 
-                const review =
-                    reviewer.review!;
-
-
-                const issuesHtml =
-                    review.issues.length === 0
-                        ? `
-                            <li>
-                                No issues found.
-                            </li>
-                        `
-                        : review.issues
-                            .map(
-                                issue =>
-                                    `<li>${escapeHtml(issue)}</li>`
-                            )
-                            .join('');
-
-
-                return `
-                    <div class="reviewer">
-
-                        <div class="reviewer-header">
-
-                            <h3>
-                                ${escapeHtml(
-                                    reviewer.name
-                                )}
-                            </h3>
-
-                            <span class="status success-status">
-                                SUCCESS
-                            </span>
-
-                        </div>
-
-
-                        <div class="review-grid">
-
-                            <div class="info-box">
-
-                                <span class="label">
-                                    Verdict
-                                </span>
-
-                                <span class="value">
-                                    ${escapeHtml(
-                                        review.verdict
-                                    )}
-                                </span>
-
-                            </div>
-
-
-                            <div class="info-box">
-
-                                <span class="label">
-                                    Confidence
-                                </span>
-
-                                <span class="value">
-                                    ${review.confidence.toFixed(2)}
-                                </span>
-
-                            </div>
-
-                        </div>
-
-
-                        <h4>
-                            Issues
-                        </h4>
-
-                        <ul>
-                            ${issuesHtml}
-                        </ul>
-
-
-                        <h4>
-                            Reasoning
-                        </h4>
-
-                        <p class="reasoning">
-                            ${escapeHtml(
-                                review.reasoning
-                            )}
-                        </p>
-
-                    </div>
-                `;
-            }
-        ).join('');
-
-
-    const combinedIssues =
-        comparison.issues.length === 0
-            ? `
-                <li>
-                    No issues found.
-                </li>
-            `
-            : comparison.issues
+    const issues =
+        comparison.issues.length > 0
+            ? comparison.issues
                 .map(
                     issue =>
-                        `<li>${escapeHtml(issue)}</li>`
+                        `<li>${escapeHtml(cleanText(issue))}</li>`
                 )
-                .join('');
+                .join('')
+            : '<li>No combined issues.</li>';
 
 
-    let correctedCodeSection = '';
+    const correctedCode =
+        typeof comparison.correctedCode === 'string'
+            ? comparison.correctedCode
+            : '';
 
 
-    if (
-        comparison.correctedCode &&
-        comparison.correctedCode.trim()
-    ) {
+    const evidenceSection =
+        externalEvidence.length > 0
+            ? `
+                <section class="section">
 
-        correctedCodeSection = `
+                    <h2>
+                        External Technical Evidence
+                    </h2>
 
-            <section class="code-section">
+                    ${externalEvidence
+                        .map(
+                            result => `
+                                <div class="evidence">
 
-                <div class="code-header">
+                                    <div class="evidence-title">
+
+                                        <a
+                                            href="#"
+                                            class="external-link"
+                                            data-url="${escapeAttribute(
+                                                result.link
+                                            )}"
+                                        >
+                                            ${escapeHtml(
+                                                cleanText(
+                                                    result.title
+                                                )
+                                            )}
+                                        </a>
+
+                                    </div>
+
+                                    <p>
+                                        ${escapeHtml(
+                                            cleanText(
+                                                result.snippet
+                                            )
+                                        )}
+                                    </p>
+
+                                </div>
+                            `
+                        )
+                        .join('')}
+
+                </section>
+            `
+            : '';
+
+
+    const correctedCodeSection =
+        correctedCode.trim()
+            ? `
+                <section class="section">
 
                     <h2>
                         Corrected Code
                     </h2>
 
+                    <pre class="code">${escapeHtml(
+                        correctedCode
+                    )}</pre>
 
                     <div class="buttons">
 
                         <button
-                            id="copyCode"
-                            class="secondary-button"
+                            id="copyButton"
                         >
                             Copy Code
                         </button>
 
-
                         <button
-                            id="applyFix"
-                            class="primary-button"
+                            id="applyButton"
                         >
                             Apply Fix
                         </button>
 
                     </div>
 
-                </div>
-
-
-                <pre><code>${escapeHtml(
-                    comparison.correctedCode
-                )}</code></pre>
-
-            </section>
-
-        `;
-
-    } else {
-
-        correctedCodeSection = `
-
-            <section class="code-section">
-
-                <div class="code-header">
+                </section>
+            `
+            : `
+                <section class="section">
 
                     <h2>
                         Corrected Code
                     </h2>
 
-                </div>
+                    <p>
+                        No corrected code was produced.
+                    </p>
 
-                <p class="muted">
-                    No corrected code was provided.
-                </p>
+                </section>
+            `;
 
-            </section>
 
-        `;
-    }
+    const safeCorrectedCode =
+        JSON.stringify(
+            correctedCode
+        )
+        .replace(
+            /</g,
+            '\\u003c'
+        )
+        .replace(
+            />/g,
+            '\\u003e'
+        )
+        .replace(
+            /&/g,
+            '\\u0026'
+        );
 
 
     return `
-
 <!DOCTYPE html>
 
-<html lang="en">
+<html>
 
 <head>
 
-    <meta charset="UTF-8">
+<meta charset="UTF-8">
 
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+/>
 
-    <meta
-        http-equiv="Content-Security-Policy"
-        content="
-            default-src 'none';
-            style-src 'unsafe-inline';
-            script-src 'unsafe-inline';
-        "
-    >
+<meta
+    http-equiv="Content-Security-Policy"
+    content="
+        default-src 'none';
+        style-src 'unsafe-inline';
+        script-src 'nonce-${nonce}';
+    "
+>
 
+<title>
+    AshenAudit Review
+</title>
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
 
+<style>
 
-    <title>
-        AshenAudit Review
-    </title>
+body {
 
+    font-family:
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
 
-    <style>
+    padding: 24px;
 
-        * {
-            box-sizing: border-box;
-        }
+    color:
+        var(--vscode-foreground);
 
+    background:
+        var(--vscode-editor-background);
 
-        body {
+    line-height: 1.45;
+}
 
-            padding: 24px;
 
-            font-family:
-                -apple-system,
-                BlinkMacSystemFont,
-                'Segoe UI',
-                sans-serif;
+h1 {
+    margin-top: 0;
+}
 
-            color:
-                var(--vscode-foreground);
 
-            background:
-                var(--vscode-editor-background);
+h2 {
+    margin-bottom: 12px;
+}
 
-        }
 
+h3 {
+    margin-bottom: 8px;
+}
 
-        h1 {
 
-            margin-top: 0;
-            margin-bottom: 6px;
+.section {
+    margin-top: 24px;
+}
 
-        }
 
+.reviewer {
 
-        h2 {
+    border:
+        1px solid
+        var(--vscode-panel-border);
 
-            margin-top: 0;
+    border-radius: 8px;
 
-        }
+    padding: 16px;
 
+    margin-bottom: 12px;
+}
 
-        h3 {
 
-            margin: 0;
+.header {
 
-        }
+    display: flex;
 
+    justify-content:
+        space-between;
 
-        h4 {
+    align-items:
+        center;
 
-            margin-bottom: 8px;
+    gap: 12px;
 
-        }
+    margin-bottom: 10px;
+}
 
 
-        .subtitle {
+.role {
 
-            color:
-                var(--vscode-descriptionForeground);
+    font-size: 17px;
 
-            margin-bottom: 24px;
+    font-weight: 600;
 
-        }
+    text-transform:
+        uppercase;
+}
 
 
-        .summary {
+.meta {
 
-            border:
-                1px solid
-                var(--vscode-panel-border);
+    opacity: 0.75;
 
-            border-radius: 8px;
+    font-size: 13px;
 
-            padding: 20px;
+    margin-bottom: 10px;
+}
 
-            margin-bottom: 24px;
 
-        }
+.success {
 
+    color:
+        var(--vscode-testing-iconPassed);
+}
 
-        .summary-grid {
 
-            display: grid;
+.failure {
 
-            grid-template-columns:
-                repeat(
-                    auto-fit,
-                    minmax(150px, 1fr)
-                );
+    color:
+        var(--vscode-testing-iconFailed);
+}
 
-            gap: 12px;
 
-        }
+.issue {
+    margin-bottom: 5px;
+}
 
 
-        .info-box {
+.reasoning {
 
-            padding: 12px;
+    margin-top: 10px;
 
-            background:
-                var(
-                    --vscode-textCodeBlock-background
-                );
+    line-height: 1.45;
+}
 
-            border-radius: 6px;
 
-        }
+.reasoning p {
+    margin: 6px 0;
+}
 
 
-        .label {
+.comparison {
 
-            display: block;
+    border:
+        2px solid
+        var(--vscode-focusBorder);
 
-            font-size: 12px;
+    border-radius: 8px;
 
-            color:
-                var(
-                    --vscode-descriptionForeground
-                );
+    padding: 18px;
+}
 
-            margin-bottom: 5px;
 
-        }
+.code {
 
+    background:
+        var(--vscode-textCodeBlock-background);
 
-        .value {
+    padding: 16px;
 
-            font-weight: 600;
+    border-radius: 6px;
 
-        }
+    overflow-x: auto;
 
+    white-space: pre;
 
-        .reviewer {
+    font-family:
+        Consolas,
+        "Courier New",
+        monospace;
 
-            border:
-                1px solid
-                var(--vscode-panel-border);
+    font-size: 13px;
 
-            border-radius: 8px;
+    border:
+        1px solid
+        var(--vscode-panel-border);
+}
 
-            padding: 18px;
 
-            margin-bottom: 16px;
+.buttons {
+    margin-top: 12px;
+}
 
-        }
 
+button {
 
-        .failed {
+    background:
+        var(--vscode-button-background);
 
-            opacity: 0.85;
+    color:
+        var(--vscode-button-foreground);
 
-        }
+    border: none;
 
+    padding: 8px 14px;
 
-        .reviewer-header {
+    margin-right: 8px;
 
-            display: flex;
+    border-radius: 4px;
 
-            justify-content: space-between;
+    cursor: pointer;
+}
 
-            align-items: center;
 
-            gap: 12px;
+button:hover {
 
-            margin-bottom: 16px;
+    background:
+        var(--vscode-button-hoverBackground);
+}
 
-        }
 
+button:disabled {
 
-        .status {
+    opacity: 0.5;
 
-            display: inline-block;
+    cursor: default;
+}
 
-            padding: 4px 8px;
 
-            border-radius: 4px;
+.evidence {
 
-            font-size: 11px;
+    border:
+        1px solid
+        var(--vscode-panel-border);
 
-            font-weight: 700;
+    border-radius: 6px;
 
-        }
+    padding: 12px;
 
+    margin-bottom: 10px;
+}
 
-        .success-status {
 
-            background: #1f6f43;
+.evidence-title {
+    margin-bottom: 6px;
+}
 
-            color: white;
 
-        }
+.evidence a {
 
+    color:
+        var(--vscode-textLink-foreground);
 
-        .failed-status {
+    font-weight: 600;
 
-            background: #8b3030;
+    cursor: pointer;
 
-            color: white;
+    text-decoration: none;
+}
 
-        }
 
+.evidence a:hover {
 
-        .review-grid {
+    text-decoration: underline;
+}
 
-            display: grid;
 
-            grid-template-columns:
-                repeat(
-                    auto-fit,
-                    minmax(150px, 1fr)
-                );
+.evidence p {
 
-            gap: 12px;
+    margin:
+        4px 0 0 0;
 
-            margin-bottom: 16px;
+    line-height: 1.4;
+}
 
-        }
-
-
-        ul {
-
-            padding-left: 22px;
-
-        }
-
-
-        li {
-
-            margin-bottom: 7px;
-
-        }
-
-
-        .reasoning {
-
-            line-height: 1.5;
-
-        }
-
-
-        .error {
-
-            color:
-                var(--vscode-errorForeground);
-
-        }
-
-
-        .issues {
-
-            border:
-                1px solid
-                var(--vscode-panel-border);
-
-            border-radius: 8px;
-
-            padding: 18px;
-
-            margin-bottom: 24px;
-
-        }
-
-
-        .code-section {
-
-            border:
-                1px solid
-                var(--vscode-panel-border);
-
-            border-radius: 8px;
-
-            overflow: hidden;
-
-            margin-bottom: 24px;
-
-        }
-
-
-        .code-header {
-
-            display: flex;
-
-            justify-content: space-between;
-
-            align-items: center;
-
-            gap: 12px;
-
-            padding: 14px 18px;
-
-            border-bottom:
-                1px solid
-                var(--vscode-panel-border);
-
-        }
-
-
-        .code-header h2 {
-
-            margin: 0;
-
-        }
-
-
-        .buttons {
-
-            display: flex;
-
-            gap: 8px;
-
-        }
-
-
-        button {
-
-            border: none;
-
-            border-radius: 5px;
-
-            padding: 8px 14px;
-
-            cursor: pointer;
-
-            font-weight: 600;
-
-        }
-
-
-        .primary-button {
-
-            background:
-                var(--vscode-button-background);
-
-            color:
-                var(--vscode-button-foreground);
-
-        }
-
-
-        .primary-button:hover {
-
-            background:
-                var(--vscode-button-hoverBackground);
-
-        }
-
-
-        .secondary-button {
-
-            background:
-                var(
-                    --vscode-textCodeBlock-background
-                );
-
-            color:
-                var(--vscode-foreground);
-
-            border:
-                1px solid
-                var(--vscode-panel-border);
-
-        }
-
-
-        .secondary-button:hover {
-
-            background:
-                var(
-                    --vscode-list-hoverBackground
-                );
-
-        }
-
-
-        pre {
-
-            margin: 0;
-
-            padding: 18px;
-
-            overflow-x: auto;
-
-            background:
-                var(
-                    --vscode-textCodeBlock-background
-                );
-
-        }
-
-
-        code {
-
-            font-family:
-                'Cascadia Code',
-                'Fira Code',
-                Consolas,
-                monospace;
-
-            font-size: 13px;
-
-            line-height: 1.5;
-
-        }
-
-
-        .muted {
-
-            color:
-                var(
-                    --vscode-descriptionForeground
-                );
-
-            padding: 0 18px 18px;
-
-        }
-
-    </style>
+</style>
 
 </head>
 
 
 <body>
 
-
-    <h1>
-        AshenAudit Review
-    </h1>
-
-
-    <div class="subtitle">
-
-        AI-assisted code verification and review
-
-    </div>
+<h1>
+    AshenAudit Review
+</h1>
 
 
-    <section class="summary">
+<section class="section">
 
-        <h2>
-            Final Result
-        </h2>
+<h2>
+    Specialized Reviewers
+</h2>
+
+${reviewerSections}
+
+</section>
 
 
-        <div class="summary-grid">
+<section class="section comparison">
+
+<h2>
+    Combined Result
+</h2>
 
 
-            <div class="info-box">
+<p>
 
-                <span class="label">
-                    Status
-                </span>
+<strong>
+    Status:
+</strong>
 
-                <span class="value">
+${escapeHtml(
+    comparison.status
+)}
+
+</p>
+
+
+<p>
+
+<strong>
+    Verdict:
+</strong>
+
+${escapeHtml(
+    comparison.verdict
+)}
+
+</p>
+
+
+<p>
+
+<strong>
+    Confidence:
+</strong>
+
+${Math.round(
+    comparison.confidence * 100
+)}%
+
+</p>
+
+
+<p>
+
+<strong>
+    Reviewers Used:
+</strong>
+
+${comparison.reviewersUsed}
+
+</p>
+
+
+<p>
+
+<strong>
+    Explanation:
+</strong>
+
+${escapeHtml(
+    cleanText(
+        comparison.explanation
+    )
+)}
+
+</p>
+
+
+<h3>
+    Combined Issues
+</h3>
+
+
+<ul>
+
+${issues}
+
+</ul>
+
+
+</section>
+
+
+${evidenceSection}
+
+
+${correctedCodeSection}
+
+
+<script nonce="${nonce}">
+
+const vscode =
+    acquireVsCodeApi();
+
+
+const correctedCode =
+    ${safeCorrectedCode};
+
+
+/*
+ * Copy Code
+ */
+
+const copyButton =
+    document.getElementById(
+        'copyButton'
+    );
+
+
+if (
+    copyButton
+) {
+
+    copyButton.addEventListener(
+        'click',
+        () => {
+
+            if (
+                !correctedCode
+            ) {
+                return;
+            }
+
+
+            vscode.postMessage({
+
+                command:
+                    'copyCode',
+
+                code:
+                    correctedCode
+
+            });
+
+        }
+    );
+}
+
+
+/*
+ * Apply Fix
+ */
+
+const applyButton =
+    document.getElementById(
+        'applyButton'
+    );
+
+
+if (
+    applyButton
+) {
+
+    applyButton.addEventListener(
+        'click',
+        () => {
+
+            if (
+                !correctedCode
+            ) {
+                return;
+            }
+
+
+            vscode.postMessage({
+
+                command:
+                    'applyFix',
+
+                code:
+                    correctedCode
+
+            });
+
+        }
+    );
+}
+
+
+/*
+ * External evidence
+ */
+
+const externalLinks =
+    document.querySelectorAll(
+        '.external-link'
+    );
+
+
+externalLinks.forEach(
+    link => {
+
+        link.addEventListener(
+            'click',
+            event => {
+
+                event.preventDefault();
+
+
+                const target =
+                    event.currentTarget;
+
+
+                if (
+                    !(target instanceof
+                    HTMLElement)
+                ) {
+                    return;
+                }
+
+
+                const url =
+                    target.dataset.url;
+
+
+                if (!url) {
+                    return;
+                }
+
+
+                vscode.postMessage({
+
+                    command:
+                        'openExternal',
+
+                    url
+
+                });
+
+            }
+        );
+    }
+);
+
+
+/*
+ * Fix applied.
+ */
+
+window.addEventListener(
+    'message',
+    event => {
+
+        if (
+            event.data &&
+            event.data.command ===
+            'fixApplied'
+        ) {
+
+            const button =
+                document.getElementById(
+                    'applyButton'
+                );
+
+
+            if (
+                button
+            ) {
+
+                button.disabled =
+                    true;
+
+                button.textContent =
+                    'Fix Applied';
+            }
+        }
+    }
+);
+
+</script>
+
+</body>
+
+</html>
+`;
+}
+
+
+function renderReviewer(
+    reviewer: ReviewerDisplay
+): string {
+
+    if (
+        reviewer.status ===
+        'failed'
+    ) {
+
+        return `
+
+            <div class="reviewer">
+
+                <div class="header">
+
+                    <div class="role">
+
+                        ${escapeHtml(
+                            cleanText(
+                                reviewer.role ||
+                                reviewer.name ||
+                                'Reviewer'
+                            )
+                        )}
+
+                    </div>
+
+
+                    <div class="failure">
+
+                        FAILED
+
+                    </div>
+
+                </div>
+
+
+                <div class="reasoning">
+
                     ${escapeHtml(
-                        comparison.status
+                        cleanText(
+                            reviewer.error ||
+                            'Unknown error.'
+                        )
                     )}
-                </span>
+
+                </div>
 
             </div>
 
+        `;
+    }
 
-            <div class="info-box">
 
-                <span class="label">
-                    Verdict
-                </span>
+    const review =
+        reviewer.review;
 
-                <span class="value">
+
+    if (
+        !review
+    ) {
+
+        return `
+
+            <div class="reviewer">
+
+                <div class="reasoning">
+
+                    No review data available.
+
+                </div>
+
+            </div>
+
+        `;
+    }
+
+
+    const reviewIssues =
+        Array.isArray(
+            review.issues
+        )
+            ? review.issues
+            : [];
+
+
+    const issues =
+        reviewIssues.length > 0
+            ? reviewIssues
+                .map(
+                    issue =>
+                        `
+                        <div class="issue">
+
+                            • ${escapeHtml(
+                                cleanText(
+                                    String(issue)
+                                )
+                            )}
+
+                        </div>
+                        `
+                )
+                .join('')
+            : `
+                <div>
+                    No issues found.
+                </div>
+            `;
+
+
+    const verdictClass =
+        review.verdict ===
+        'pass'
+            ? 'success'
+            : review.verdict ===
+              'issues_found'
+                ? 'failure'
+                : '';
+
+
+    return `
+
+        <div class="reviewer">
+
+            <div class="header">
+
+                <div class="role">
+
                     ${escapeHtml(
-                        comparison.verdict
+                        cleanText(
+                            review.role
+                        )
                     )}
-                </span>
+
+                </div>
+
+
+                <div class="${verdictClass}">
+
+                    ${escapeHtml(
+                        cleanText(
+                            review.verdict
+                        )
+                    )}
+
+                </div>
 
             </div>
 
 
-            <div class="info-box">
+            <div class="meta">
 
-                <span class="label">
-                    Confidence
-                </span>
+                Provider:
+                ${escapeHtml(
+                    cleanText(
+                        review.provider
+                    )
+                )}
 
-                <span class="value">
-                    ${comparison.confidence.toFixed(2)}
-                </span>
+                &nbsp; | &nbsp;
+
+                Model:
+                ${escapeHtml(
+                    cleanText(
+                        review.model
+                    )
+                )}
 
             </div>
 
 
-            <div class="info-box">
+            <div>
 
-                <span class="label">
-                    Reviewers Used
-                </span>
+                <strong>
+                    Confidence:
+                </strong>
 
-                <span class="value">
-                    ${comparison.reviewersUsed}
-                </span>
+                ${formatConfidence(
+                    review.confidence
+                )}
+
+            </div>
+
+
+            <div class="section">
+
+                <strong>
+                    Issues
+                </strong>
+
+                <div>
+
+                    ${issues}
+
+                </div>
+
+            </div>
+
+
+            <div class="reasoning">
+
+                <strong>
+                    Reasoning
+                </strong>
+
+                <p>
+                    ${escapeHtml(
+                        cleanText(
+                            review.reasoning
+                        )
+                    )}
+                </p>
 
             </div>
 
         </div>
 
-
-        <h4>
-            Explanation
-        </h4>
+    `;
+}
 
 
-        <p>
-            ${escapeHtml(
-                comparison.explanation
-            )}
-        </p>
+function formatConfidence(
+    confidence: number
+): string {
 
-    </section>
+    if (
+        typeof confidence !==
+        'number' ||
+        !Number.isFinite(
+            confidence
+        )
+    ) {
 
-
-    <section class="issues">
-
-        <h2>
-            Combined Issues
-        </h2>
-
-
-        <ul>
-            ${combinedIssues}
-        </ul>
-
-    </section>
+        return 'N/A';
+    }
 
 
-    <section>
-
-        <h2>
-            Individual Reviews
-        </h2>
-
-        ${reviewerHtml}
-
-    </section>
-
-
-    ${correctedCodeSection}
+    const safeConfidence =
+        Math.max(
+            0,
+            Math.min(
+                1,
+                confidence
+            )
+        );
 
 
-    <script>
-
-        const vscode =
-            acquireVsCodeApi();
-
-
-        const copyButton =
-            document.getElementById(
-                'copyCode'
-            );
+    return `${
+        Math.round(
+            safeConfidence * 100
+        )
+    }%`;
+}
 
 
-        if (copyButton) {
+function cleanText(
+    value: string
+): string {
 
-            copyButton.addEventListener(
-                'click',
-                () => {
-
-                    vscode.postMessage({
-
-                        command:
-                            'copyCode'
-
-                    });
-
-                }
-            );
-
-        }
-
-
-        const applyButton =
-            document.getElementById(
-                'applyFix'
-            );
-
-
-        if (applyButton) {
-
-            applyButton.addEventListener(
-                'click',
-                () => {
-
-                    vscode.postMessage({
-
-                        command:
-                            'applyFix'
-
-                    });
-
-                }
-            );
-
-        }
-
-    </script>
-
-
-</body>
-
-</html>
-
-`;
+    return String(value)
+        .replace(
+            /\s+/g,
+            ' '
+        )
+        .trim();
 }
 
 
@@ -1028,7 +1239,7 @@ function escapeHtml(
     value: string
 ): string {
 
-    return value
+    return String(value)
         .replace(
             /&/g,
             '&amp;'
@@ -1049,4 +1260,44 @@ function escapeHtml(
             /'/g,
             '&#039;'
         );
+}
+
+
+function escapeAttribute(
+    value: string
+): string {
+
+    return escapeHtml(
+        value
+    );
+}
+
+
+function getNonce(): string {
+
+    const characters =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
+
+    let nonce =
+        '';
+
+
+    for (
+        let index = 0;
+        index < 32;
+        index++
+    ) {
+
+        nonce +=
+            characters.charAt(
+                Math.floor(
+                    Math.random() *
+                    characters.length
+                )
+            );
+    }
+
+
+    return nonce;
 }

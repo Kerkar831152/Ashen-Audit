@@ -3,29 +3,36 @@ import * as path from 'path';
 import * as dotenv from 'dotenv';
 
 import {
-    reviewCode,
-    reviewCodeWithGeminiLite
-} from './ai/gemini.js';
+    runSpecializedReviewer
+} from './ai/reviewer.js';
 
 import {
-    ReviewResult
+    generateFinalReview
+} from './ai/finalReviewer.js';
+
+import {
+    validateCode,
+    ValidationResult
+} from './ai/validator.js';
+
+import {
+    ReviewerDisplay,
+    SpecializedReviewResult,
+    ReviewerRole
 } from './ai/types.js';
 
 import {
-    reviewCodeWithOpenAI
-} from './ai/openai.js';
-
-import {
-    reviewCodeWithGroq
-} from './ai/groq.js';
-
-import {
-    compareReviews
+    compareReviews,
+    ComparisonResult
 } from './ai/compare.js';
 
 import {
-    showReviewPanel,
-    ReviewerDisplay
+    searchWithSerpApi,
+    SearchResult
+} from './ai/serpapi.js';
+
+import {
+    showReviewPanel
 } from './ui/reviewPanel.js';
 
 
@@ -33,16 +40,12 @@ export function activate(
     context: vscode.ExtensionContext
 ) {
 
-    /*
-     * Load .env from the actual extension
-     * installation/project directory.
-     */
-
     const envPath =
         path.join(
             context.extensionPath,
             '.env'
         );
+
 
     const envResult =
         dotenv.config({
@@ -50,40 +53,24 @@ export function activate(
         });
 
 
-    console.log(
-        'AshenAudit: Extension activated.'
-    );
+    if (envResult.error) {
 
-    console.log(
-        'AshenAudit: .env path:',
-        envPath
-    );
-
-    console.log(
-        'AshenAudit: .env loaded:',
-        envResult.error
-            ? 'NO'
-            : 'YES'
-    );
-
-    console.log(
-        'GROQ KEY:',
-        process.env.GROQ_API_KEY
-            ? 'LOADED'
-            : 'MISSING'
-    );
-
-
-    const output =
-        vscode.window.createOutputChannel(
-            'AshenAudit'
+        console.error(
+            'AshenAudit: Failed to load .env:',
+            envResult.error
         );
+    }
 
 
-    const verifyCode =
+    const disposable =
         vscode.commands.registerCommand(
             'ashen-audit.verifyCode',
             async () => {
+
+                vscode.window.showInformationMessage(
+                    'AshenAudit verification started.'
+                );
+
 
                 const editor =
                     vscode.window.activeTextEditor;
@@ -103,451 +90,647 @@ export function activate(
                     editor.selection;
 
 
-                const code =
-                    editor.document.getText(
-                        selection
-                    );
-
-
-                if (!code.trim()) {
+                if (
+                    selection.isEmpty
+                ) {
 
                     vscode.window.showWarningMessage(
-                        'AshenAudit: Please select some code first.'
+                        'AshenAudit: Select some code first.'
                     );
 
                     return;
                 }
 
 
-                const documentUri =
-                    editor.document.uri;
-
-
-                const selectionRange =
-                    new vscode.Range(
-                        selection.start,
-                        selection.end
+                const code =
+                    editor.document.getText(
+                        selection
                     );
 
 
-                output.clear();
+                const languageId =
+                    editor.document.languageId;
 
 
-                output.appendLine(
-                    'AshenAudit'
+                const outputChannel =
+                    vscode.window.createOutputChannel(
+                        'AshenAudit'
+                    );
+
+
+                outputChannel.show(
+                    true
                 );
 
-                output.appendLine(
-                    '=========='
+
+                outputChannel.appendLine(
+                    '========================================'
                 );
 
-                output.appendLine('');
-
-
-                output.appendLine(
-                    'Code received.'
+                outputChannel.appendLine(
+                    'AshenAudit verification started'
                 );
 
-                output.appendLine('');
-
-
-                output.appendLine(
-                    'Starting independent AI reviewers...'
+                outputChannel.appendLine(
+                    '========================================'
                 );
 
-                output.appendLine('');
+
+                const roles:
+                    ReviewerRole[] = [
+                        'triage',
+                        'architecture',
+                        'logic',
+                        'security'
+                    ];
 
 
-                output.show();
+                const results =
+                    await Promise.allSettled(
+                        roles.map(
+                            role =>
+                                runSpecializedReviewer(
+                                    role,
+                                    code
+                                )
+                        )
+                    );
 
 
-                let reviewers:
+                const reviewers:
                     ReviewerDisplay[] = [];
 
 
-                let comparison:
-                    ReturnType<
-                        typeof compareReviews
-                    >;
+                const successfulReviews:
+                    SpecializedReviewResult[] = [];
 
 
-                try {
+                results.forEach(
+                    (
+                        result,
+                        index
+                    ) => {
 
-                    comparison =
-                        await vscode.window.withProgress(
-                            {
-                                location:
-                                    vscode.ProgressLocation.Notification,
+                        const role =
+                            roles[index];
 
-                                title:
-                                    'AshenAudit: AI reviewers are analyzing your code...',
 
-                                cancellable: false
-                            },
+                        if (
+                            result.status ===
+                            'fulfilled'
+                        ) {
 
-                            async () => {
+                            const review =
+                                result.value;
 
-                                const results =
-                                    await Promise.allSettled([
-                                        reviewCode(code),
-                                        reviewCodeWithGeminiLite(code),
-                                        reviewCodeWithGroq(code),
-                                        reviewCodeWithOpenAI(code)
-                                    ]);
 
+                            successfulReviews.push(
+                                review
+                            );
 
-                                const names = [
 
-                                    'Gemini 3.6 Flash',
+                            reviewers.push({
 
-                                    'Gemini 3.1 Flash-Lite',
+                                name:
+                                    `${role} reviewer`,
 
-                                    'Groq GPT-OSS 20B',
+                                role:
+                                    review.role,
 
-                                    'OpenAI GPT-5.6 Luna'
+                                provider:
+                                    review.provider,
 
-                                ];
+                                model:
+                                    review.model,
 
+                                status:
+                                    'success',
 
-                                for (
-                                    let i = 0;
-                                    i < results.length;
-                                    i++
-                                ) {
+                                review
 
-                                    const result =
-                                        results[i];
+                            });
 
 
-                                    if (
-                                        result.status ===
-                                        'fulfilled'
-                                    ) {
+                            outputChannel.appendLine('');
 
-                                        reviewers.push({
+                            outputChannel.appendLine(
+                                `========== ${role.toUpperCase()} ==========`
+                            );
 
-                                            name:
-                                                names[i],
+                            outputChannel.appendLine(
+                                `Provider: ${review.provider}`
+                            );
 
-                                            status:
-                                                'success',
+                            outputChannel.appendLine(
+                                `Model: ${review.model}`
+                            );
 
-                                            review:
-                                                result.value
+                            outputChannel.appendLine(
+                                `Verdict: ${review.verdict}`
+                            );
 
-                                        });
+                            outputChannel.appendLine(
+                                `Confidence: ${review.confidence}`
+                            );
 
-                                    } else {
 
-                                        reviewers.push({
+                            if (
+                                review.issues.length > 0
+                            ) {
 
-                                            name:
-                                                names[i],
-
-                                            status:
-                                                'failed',
-
-                                            error:
-                                                result.reason instanceof Error
-                                                    ? result.reason.message
-                                                    : String(
-                                                        result.reason
-                                                    )
-
-                                        });
-
-                                    }
-
-                                }
-
-
-                                output.appendLine(
-                                    'INDIVIDUAL REVIEWS'
-                                );
-
-                                output.appendLine(
-                                    '=================='
-                                );
-
-                                output.appendLine('');
-
-
-                                for (
-                                    const reviewer
-                                    of reviewers
-                                ) {
-
-                                    output.appendLine(
-                                        reviewer.name
-                                    );
-
-
-                                    output.appendLine(
-                                        '-'.repeat(
-                                            reviewer.name.length
-                                        )
-                                    );
-
-
-                                    if (
-                                        reviewer.status ===
-                                        'failed'
-                                    ) {
-
-                                        output.appendLine(
-                                            'Status: FAILED'
-                                        );
-
-                                        output.appendLine(
-                                            `Error: ${reviewer.error}`
-                                        );
-
-                                        output.appendLine('');
-
-                                        continue;
-                                    }
-
-
-                                    const review =
-                                        reviewer.review!;
-
-
-                                    output.appendLine(
-                                        'Status: SUCCESS'
-                                    );
-
-
-                                    output.appendLine(
-                                        `Verdict: ${review.verdict}`
-                                    );
-
-
-                                    output.appendLine(
-                                        `Confidence: ${review.confidence}`
-                                    );
-
-
-                                    output.appendLine('');
-
-
-                                    output.appendLine(
-                                        'Issues:'
-                                    );
-
-
-                                    if (
-                                        review.issues.length ===
-                                        0
-                                    ) {
-
-                                        output.appendLine(
-                                            '- No issues found.'
-                                        );
-
-                                    } else {
-
-                                        for (
-                                            const issue
-                                            of review.issues
-                                        ) {
-
-                                            output.appendLine(
-                                                `- ${issue}`
-                                            );
-
-                                        }
-
-                                    }
-
-
-                                    output.appendLine('');
-
-
-                                    output.appendLine(
-                                        'Reasoning:'
-                                    );
-
-
-                                    output.appendLine(
-                                        review.reasoning
-                                    );
-
-
-                                    output.appendLine('');
-
-                                }
-
-
-                                const successfulReviews:
-                                    ReviewResult[] =
-                                        reviewers
-                                            .filter(
-                                                reviewer =>
-                                                    reviewer.status ===
-                                                    'success'
-                                            )
-                                            .map(
-                                                reviewer =>
-                                                    reviewer.review!
-                                            );
-
-
-                                const result =
-                                    compareReviews(
-                                        successfulReviews
-                                    );
-
-
-                                output.appendLine('');
-                                output.appendLine(
-                                    'ASHENAUDIT COMPARISON'
-                                );
-
-                                output.appendLine(
-                                    '====================='
-                                );
-
-                                output.appendLine('');
-
-
-                                output.appendLine(
-                                    `Status: ${result.status}`
+                                outputChannel.appendLine(
+                                    'Issues:'
                                 );
 
 
-                                output.appendLine(
-                                    `Final Verdict: ${result.verdict}`
-                                );
+                                review.issues.forEach(
+                                    issue => {
 
-
-                                output.appendLine(
-                                    `Confidence: ${result.confidence.toFixed(2)}`
-                                );
-
-
-                                output.appendLine(
-                                    `Reviewers Used: ${result.reviewersUsed}`
-                                );
-
-
-                                output.appendLine('');
-
-
-                                output.appendLine(
-                                    'Explanation:'
-                                );
-
-
-                                output.appendLine(
-                                    result.explanation
-                                );
-
-
-                                output.appendLine('');
-
-
-                                output.appendLine(
-                                    'Combined Issues:'
-                                );
-
-
-                                if (
-                                    result.issues.length ===
-                                    0
-                                ) {
-
-                                    output.appendLine(
-                                        '- No issues found.'
-                                    );
-
-                                } else {
-
-                                    for (
-                                        const issue
-                                        of result.issues
-                                    ) {
-
-                                        output.appendLine(
+                                        outputChannel.appendLine(
                                             `- ${issue}`
                                         );
-
                                     }
-
-                                }
-
-
-                                if (
-                                    result.correctedCode
-                                ) {
-
-                                    output.appendLine('');
-
-                                    output.appendLine(
-                                        'Suggested Corrected Code:'
-                                    );
-
-                                    output.appendLine(
-                                        result.correctedCode
-                                    );
-
-                                }
-
-
-                                output.appendLine('');
-                                output.appendLine(
-                                    'Next step:'
                                 );
 
+                            } else {
 
-                                if (
-                                    result.status ===
-                                    'agreement'
-                                ) {
+                                outputChannel.appendLine(
+                                    'Issues: None'
+                                );
+                            }
 
-                                    output.appendLine(
-                                        'AI reviewers agree. External evidence is not currently required.'
+
+                            outputChannel.appendLine(
+                                `Reasoning: ${review.reasoning}`
+                            );
+
+
+                        } else {
+
+                            const error =
+                                result.reason instanceof Error
+                                    ? result.reason.message
+                                    : String(
+                                        result.reason
                                     );
 
-                                } else if (
-                                    result.status ===
-                                    'disagreement'
-                                ) {
 
-                                    output.appendLine(
-                                        'AI reviewers disagree. This case should be sent to SerpApi for external evidence.'
-                                    );
+                            reviewers.push({
 
-                                } else {
+                                name:
+                                    `${role} reviewer`,
 
-                                    output.appendLine(
-                                        'Not enough reviewers responded for independent verification.'
-                                    );
+                                role,
 
-                                }
+                                status:
+                                    'failed',
+
+                                error
+
+                            });
 
 
-                                return result;
+                            outputChannel.appendLine('');
 
+                            outputChannel.appendLine(
+                                `========== ${role.toUpperCase()} ==========`
+                            );
+
+                            outputChannel.appendLine(
+                                `FAILED: ${error}`
+                            );
+                        }
+                    }
+                );
+
+
+                let comparison:
+                    ComparisonResult =
+                    compareReviews(
+                        successfulReviews
+                    );
+
+
+                outputChannel.appendLine('');
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+                outputChannel.appendLine(
+                    'COMBINED RESULT'
+                );
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+                outputChannel.appendLine(
+                    `Status: ${comparison.status}`
+                );
+
+                outputChannel.appendLine(
+                    `Verdict: ${comparison.verdict}`
+                );
+
+                outputChannel.appendLine(
+                    `Confidence: ${comparison.confidence}`
+                );
+
+                outputChannel.appendLine(
+                    `Reviewers used: ${comparison.reviewersUsed}`
+                );
+
+                outputChannel.appendLine(
+                    `Explanation: ${comparison.explanation}`
+                );
+
+
+                /*
+                 * Search external evidence only when
+                 * primary technical reviewers disagree.
+                 */
+
+                let externalEvidence:
+                    SearchResult[] = [];
+
+
+                if (
+                    comparison.status ===
+                    'disagreement'
+                ) {
+
+                    outputChannel.appendLine('');
+
+                    outputChannel.appendLine(
+                        'Reviewers disagreed.'
+                    );
+
+                    outputChannel.appendLine(
+                        'Searching external technical evidence...'
+                    );
+
+
+                    try {
+
+                        const searchQuery =
+                            buildTechnicalSearchQuery(
+                                languageId,
+                                comparison.issues
+                            );
+
+
+                        outputChannel.appendLine(
+                            `Search query: ${searchQuery}`
+                        );
+
+
+                        const searchResult =
+                            await searchWithSerpApi(
+                                searchQuery
+                            );
+
+
+                        externalEvidence =
+                            searchResult.results;
+
+
+                        outputChannel.appendLine(
+                            `SerpApi results: ${externalEvidence.length}`
+                        );
+
+
+                        externalEvidence.forEach(
+                            (
+                                result,
+                                index
+                            ) => {
+
+                                outputChannel.appendLine(
+                                    `${index + 1}. ${result.title}`
+                                );
+
+                                outputChannel.appendLine(
+                                    `   ${result.link}`
+                                );
+
+                                outputChannel.appendLine(
+                                    `   ${result.snippet}`
+                                );
                             }
                         );
 
 
-                    showReviewPanel(
-                        context,
-                        reviewers,
-                        comparison,
-                        documentUri,
-                        selectionRange
+                    } catch (error) {
+
+                        const message =
+                            error instanceof Error
+                                ? error.message
+                                : String(error);
+
+
+                        outputChannel.appendLine(
+                            `SerpApi failed: ${message}`
+                        );
+                    }
+                }
+
+
+                /*
+                 * FINAL SYNTHESIS
+                 */
+
+                outputChannel.appendLine('');
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+                outputChannel.appendLine(
+                    'FINAL SYNTHESIS'
+                );
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+
+                if (
+                    successfulReviews.length === 0
+                ) {
+
+                    outputChannel.appendLine(
+                        'Final synthesis skipped: no successful reviewers.'
                     );
+
+                } else {
+
+                    try {
+
+                        const finalReview =
+                            await generateFinalReview(
+                                code,
+                                successfulReviews,
+                                externalEvidence
+                            );
+
+
+                        comparison =
+                            applyFinalReview(
+                                comparison,
+                                finalReview
+                            );
+
+
+                        outputChannel.appendLine(
+                            `Final verdict: ${finalReview.verdict}`
+                        );
+
+                        outputChannel.appendLine(
+                            `Final confidence: ${finalReview.confidence}`
+                        );
+
+                        outputChannel.appendLine(
+                            `Final issues: ${finalReview.issues.length}`
+                        );
+
+
+                        outputChannel.appendLine(
+                            finalReview.correctedCode &&
+                            finalReview.correctedCode.trim()
+                                ? 'Final corrected code: GENERATED'
+                                : 'Final corrected code: NONE'
+                        );
+
+
+                    } catch (error) {
+
+                        const message =
+                            error instanceof Error
+                                ? error.message
+                                : String(error);
+
+
+                        outputChannel.appendLine(
+                            `Final synthesis failed: ${message}`
+                        );
+
+
+                        /*
+                         * Keep a correction from a specialized reviewer
+                         * instead of losing it completely.
+                         */
+
+                        const reviewerCorrection =
+                            successfulReviews.find(
+                                review =>
+                                    review.correctedCode &&
+                                    review.correctedCode.trim()
+                            );
+
+
+                        if (
+                            reviewerCorrection
+                        ) {
+
+                            comparison.correctedCode =
+                                reviewerCorrection.correctedCode;
+
+                            comparison.verdict =
+                                'issues_found';
+
+                            comparison.explanation =
+                                `Final synthesis unavailable. Using the correction generated by the ${reviewerCorrection.role} reviewer.`;
+
+                            outputChannel.appendLine(
+                                `Fallback corrected code: ${reviewerCorrection.role} reviewer`
+                            );
+                        }
+                    }
+                }
+
+
+                /*
+                 * LOCAL VALIDATION
+                 */
+
+                outputChannel.appendLine('');
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+                outputChannel.appendLine(
+                    'LOCAL VALIDATION'
+                );
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+
+                let validation:
+                    ValidationResult | null =
+                    null;
+
+
+                const codeToValidate =
+                    comparison.correctedCode &&
+                    comparison.correctedCode.trim()
+                        ? comparison.correctedCode
+                        : code;
+
+
+                try {
+
+                    validation =
+                        await validateCode(
+                            codeToValidate,
+                            languageId
+                        );
+
+
+                    outputChannel.appendLine(
+                        `Validator: ${validation.compiler}`
+                    );
+
+                    outputChannel.appendLine(
+                        `Status: ${validation.status}`
+                    );
+
+                    outputChannel.appendLine(
+                        validation.output
+                    );
+
+
+                    /*
+                     * If generated code fails compilation,
+                     * send compiler output back into final repair.
+                     */
+
+                    if (
+                        validation.status ===
+                        'failed' &&
+                        comparison.correctedCode &&
+                        comparison.correctedCode.trim()
+                    ) {
+
+                        outputChannel.appendLine('');
+
+                        outputChannel.appendLine(
+                            'Generated code failed local validation.'
+                        );
+
+                        outputChannel.appendLine(
+                            'Running final repair again with compiler errors...'
+                        );
+
+
+                        try {
+
+                            const retryReview =
+                                await generateFinalReview(
+                                    code,
+                                    successfulReviews,
+                                    externalEvidence,
+                                    validation.output
+                                );
+
+
+                            comparison =
+                                applyFinalReview(
+                                    comparison,
+                                    retryReview
+                                );
+
+
+                            outputChannel.appendLine(
+                                `Retry verdict: ${retryReview.verdict}`
+                            );
+
+                            outputChannel.appendLine(
+                                `Retry confidence: ${retryReview.confidence}`
+                            );
+
+
+                            if (
+                                retryReview.correctedCode &&
+                                retryReview.correctedCode.trim()
+                            ) {
+
+                                outputChannel.appendLine(
+                                    'Retry corrected code: GENERATED'
+                                );
+
+
+                                validation =
+                                    await validateCode(
+                                        retryReview.correctedCode,
+                                        languageId
+                                    );
+
+
+                                outputChannel.appendLine('');
+
+                                outputChannel.appendLine(
+                                    'Second validation attempt:'
+                                );
+
+                                outputChannel.appendLine(
+                                    `Validator: ${validation.compiler}`
+                                );
+
+                                outputChannel.appendLine(
+                                    `Status: ${validation.status}`
+                                );
+
+                                outputChannel.appendLine(
+                                    validation.output
+                                );
+                            }
+
+
+                        } catch (error) {
+
+                            const message =
+                                error instanceof Error
+                                    ? error.message
+                                    : String(error);
+
+
+                            outputChannel.appendLine(
+                                `Retry repair failed: ${message}`
+                            );
+                        }
+                    }
+
+
+                    /*
+                     * Add compact validation information
+                     * to the explanation shown in the UI.
+                     */
+
+                    const validationText =
+                        buildValidationText(
+                            validation
+                        );
+
+
+                    comparison.explanation =
+                        `${comparison.explanation.trim()} ${validationText}`;
+
+
+                    if (
+                        validation.status ===
+                        'failed'
+                    ) {
+
+                        comparison.verdict =
+                            'issues_found';
+                    }
 
 
                 } catch (error) {
-
-                    console.error(
-                        'AshenAudit: Verification failed:',
-                        error
-                    );
-
 
                     const message =
                         error instanceof Error
@@ -555,39 +738,250 @@ export function activate(
                             : String(error);
 
 
-                    output.appendLine('');
-
-                    output.appendLine(
-                        'AshenAudit process failed:'
-                    );
-
-                    output.appendLine(
-                        message
+                    outputChannel.appendLine(
+                        `Local validation could not run: ${message}`
                     );
 
 
-                    output.show();
-
-
-                    vscode.window.showErrorMessage(
-                        `AshenAudit: ${message}`
-                    );
-
+                    comparison.explanation =
+                        `${comparison.explanation.trim()} Local validation could not be completed.`;
                 }
 
+
+                /*
+                 * FINAL RESULT
+                 */
+
+                outputChannel.appendLine('');
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+                outputChannel.appendLine(
+                    'FINAL RESULT'
+                );
+
+                outputChannel.appendLine(
+                    '========================================'
+                );
+
+                outputChannel.appendLine(
+                    `Verdict: ${comparison.verdict}`
+                );
+
+                outputChannel.appendLine(
+                    `Confidence: ${comparison.confidence}`
+                );
+
+                outputChannel.appendLine(
+                    `Corrected code: ${
+                        comparison.correctedCode &&
+                        comparison.correctedCode.trim()
+                            ? 'YES'
+                            : 'NO'
+                    }`
+                );
+
+
+                if (
+                    validation
+                ) {
+
+                    outputChannel.appendLine(
+                        `Local validation: ${validation.status}`
+                    );
+                }
+
+
+                /*
+                 * Open review window.
+                 */
+
+                showReviewPanel(
+                    context,
+                    reviewers,
+                    comparison,
+                    editor.document.uri,
+                    selection,
+                    externalEvidence
+                );
             }
         );
 
 
     context.subscriptions.push(
-        verifyCode
+        disposable
     );
+}
 
 
-    context.subscriptions.push(
-        output
+function applyFinalReview(
+    comparison: ComparisonResult,
+    finalReview: {
+        verdict:
+            'pass' |
+            'issues_found' |
+            'uncertain';
+
+        confidence:
+            number;
+
+        issues:
+            string[];
+
+        reasoning:
+            string;
+
+        correctedCode:
+            string;
+    }
+): ComparisonResult {
+
+    comparison.verdict =
+        finalReview.verdict;
+
+    comparison.confidence =
+        finalReview.confidence;
+
+    comparison.explanation =
+        finalReview.reasoning.trim();
+
+    comparison.issues =
+        finalReview.issues;
+
+    comparison.correctedCode =
+        finalReview.correctedCode;
+
+
+    return comparison;
+}
+
+
+function buildValidationText(
+    validation: ValidationResult
+): string {
+
+    if (
+        validation.status ===
+        'passed'
+    ) {
+
+        return (
+            `Local validation passed using ${validation.compiler}.`
+        );
+    }
+
+
+    if (
+        validation.status ===
+        'failed'
+    ) {
+
+        return (
+            `Local validation failed using ${validation.compiler}. ${validation.output.trim()}`
+        );
+    }
+
+
+    return (
+        `Local validation unavailable: ${validation.output.trim()}`
     );
+}
 
+
+function buildTechnicalSearchQuery(
+    languageId: string,
+    issues: string[]
+): string {
+
+    const languageMap:
+        Record<string, string> = {
+
+        cpp:
+            'C++',
+
+        c:
+            'C',
+
+        javascript:
+            'JavaScript',
+
+        typescript:
+            'TypeScript',
+
+        python:
+            'Python',
+
+        java:
+            'Java',
+
+        csharp:
+            'C#',
+
+        go:
+            'Go',
+
+        rust:
+            'Rust'
+    };
+
+
+    const language =
+        languageMap[languageId] ||
+        languageId;
+
+
+    const cleanedIssues =
+        issues
+            .map(
+                issue =>
+                    issue
+                        .replace(
+                            /^\[[^\]]+\]\s*/,
+                            ''
+                        )
+                        .replace(
+                            /[`'"()[\]]/g,
+                            ' '
+                        )
+                        .replace(
+                            /\s+/g,
+                            ' '
+                        )
+                        .trim()
+            )
+            .filter(
+                issue =>
+                    issue.length > 0
+            );
+
+
+    const selectedIssues =
+        cleanedIssues.slice(
+            0,
+            3
+        );
+
+
+    const keywords =
+        selectedIssues
+            .join(' ')
+            .split(/\s+/)
+            .filter(
+                word =>
+                    word.length > 3
+            )
+            .slice(
+                0,
+                18
+            )
+            .join(' ');
+
+
+    return (
+        `${language} programming ${keywords} syntax documentation`
+    );
 }
 
 

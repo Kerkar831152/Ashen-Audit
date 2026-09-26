@@ -3,65 +3,43 @@ import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
-import {
-    ReviewResult
-} from './types.js';
+import { ReviewResult } from './types.js';
 
-
-const currentFile =
-    fileURLToPath(import.meta.url);
-
-
-const currentDirectory =
-    path.dirname(currentFile);
-
-
-const projectRoot =
-    path.resolve(
-        currentDirectory,
-        '../../'
-    );
-
-
-const envPath =
-    path.join(
-        projectRoot,
-        '.env'
-    );
-
+const currentFile = fileURLToPath(import.meta.url);
+const currentDirectory = path.dirname(currentFile);
+const projectRoot = path.resolve(currentDirectory, '../../');
+const envPath = path.join(projectRoot, '.env');
 
 dotenv.config({
     path: envPath
 });
 
-
-const apiKey =
-    process.env.GROQ_API_KEY;
-
+const apiKey = process.env.GROQ_API_KEY;
 
 if (!apiKey) {
-
     throw new Error(
         `AshenAudit: GROQ_API_KEY was not found. Expected .env at: ${envPath}`
     );
-
 }
 
+const groq = new Groq({
+    apiKey
+});
 
-const groq =
-    new Groq({
-        apiKey
-    });
-
-
-const prompt = (code: string) => `
+function buildPrompt(
+    code: string,
+    instruction: string
+): string {
+    return `
 You are an independent code verification system.
 
-Analyze the code carefully.
+${instruction}
 
-Determine whether it is correct.
+Analyze the supplied code carefully.
 
-Return ONLY valid JSON with this structure:
+Return ONLY valid JSON.
+
+Required structure:
 
 {
     "verdict": "pass",
@@ -75,6 +53,7 @@ Rules:
 - verdict must be "pass", "issues_found", or "uncertain".
 - confidence must be between 0 and 1.
 - Do not invent problems.
+- Only report issues supported by the supplied code.
 - If there is a real problem, explain it in issues.
 - If there is a problem, correctedCode must contain the complete corrected code.
 - If there is no problem, correctedCode must be empty.
@@ -86,72 +65,49 @@ Code:
 
 ${code}
 `;
+}
 
-
-export async function reviewCodeWithGroq(
-    code: string
+export async function reviewWithGroq(
+    code: string,
+    instruction: string,
+    model: string
 ): Promise<ReviewResult> {
-
     console.log(
-        'AshenAudit: Sending request to Groq...'
+        `AshenAudit: Sending ${model} request to Groq...`
     );
 
-
-    try {
-
-        const response =
-            await groq.chat.completions.create({
-
-                model:
-                    'openai/gpt-oss-20b',
-
-                messages: [
-                    {
-                        role: 'user',
-                        content: prompt(code)
-                    }
-                ],
-
-                response_format: {
-                    type: 'json_object'
+    const response =
+        await groq.chat.completions.create({
+            model,
+            messages: [
+                {
+                    role: 'user',
+                    content: buildPrompt(
+                        code,
+                        instruction
+                    )
                 }
+            ],
+            response_format: {
+                type: 'json_object'
+            }
+        });
 
-            });
+    const text =
+        response.choices[0]?.message?.content;
 
-
-        const text =
-            response.choices[0]?.message?.content;
-
-
-        if (!text) {
-
-            throw new Error(
-                'Groq returned an empty response.'
-            );
-
-        }
-
-
-        const review =
-            JSON.parse(text) as ReviewResult;
-
-
-        console.log(
-            'AshenAudit: Groq review completed.'
+    if (!text) {
+        throw new Error(
+            'Groq returned an empty response.'
         );
-
-
-        return review;
-
-    } catch (error) {
-
-        console.error(
-            'AshenAudit: Groq review failed:',
-            error
-        );
-
-        throw error;
-
     }
 
+    const review =
+        JSON.parse(text) as ReviewResult;
+
+    console.log(
+        `AshenAudit: ${model} review completed.`
+    );
+
+    return review;
 }
