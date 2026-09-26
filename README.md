@@ -288,3 +288,8 @@ VS Code Extension
 **Version:** `0.0.1`
 
 AshenAudit is cu
+
+## License
+
+AshenAudit is licensed under the MIT License.
+See the [LICENSE](LICENSE) file for details.
