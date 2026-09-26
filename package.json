@@ -4,7 +4,7 @@
   "publisher": "VithalKerkar",
   "type": "module",
   "description": "AI-assisted code verification, review, and improvement inside VS Code.",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.138.0"
